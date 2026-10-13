@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>실시간 1:1 이성 매칭 & 채팅</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700&display=swap');
+        body { font-family: 'Pretendard', sans-serif; }
+        .fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .card-glow:hover { box-shadow: 0 12px 30px rgba(236, 72, 153, 0.2); transform: translateY(-3px); }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-rose-50 via-purple-50 to-indigo-100 min-h-screen flex items-center justify-center p-4">
+
+    <div id="app" class="max-w-xl w-full bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl p-6 md:p-8 text-center relative overflow-hidden border border-white/50">
+        <!-- 동적 렌더링 영역 -->
+    </div>
+
+    <script>
+        // 👉 새로운 Render 백엔드 서버 주소 반영 완료
+        const API_BASE_URL = "https://render-w9tq.onrender.com";
+
+        let myGender = localStorage.getItem('myGender') || null;
+        let myName = localStorage.getItem('myName') || null;
+        let chatInterval = null;
+
+        const app = document.getElementById('app');
+
+        async function fetchServerData() {
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/profiles`);
+                return await res.json();
+            } catch (err) {
+                console.error("서버 연결 실패:", err);
+                return { profiles: [], busyUsers: [] };
+            }
+        }
+
+        async function initApp() {
+            const data = await fetchServerData();
+            const myProfileExists = data.profiles.some(p => p.name === myName && p.gender === myGender);
+
+            if (!myGender || !myName || !myProfileExists) {
+                renderRegisterScreen();
+            } else {
+                renderDashboard(data);
+            }
+        }
+
+        // 1. 첫 방문자 / 미등록자 프로필 카드 등록 화면
+        function renderRegisterScreen() {
+            app.innerHTML = `
+                <div class="py-4 fade-in text-left">
+                    <div class="text-center mb-6">
+                        <div class="inline-block p-3 bg-pink-100 rounded-2xl text-3xl mb-2 shadow-inner">✨</div>
+                        <h1 class="text-2xl font-extrabold text-gray-800">실시간 이성 매칭 시작하기</h1>
+                        <p class="text-gray-500 text-xs mt-1">참여하려면 먼저 본인의 프로필 카드를 등록해 주세요!</p>
+                    </div>
+                    
+                    <form onsubmit="handleRegister(event)" class="space-y-3 text-xs">
+                        <div>
+                            <label class="block font-semibold text-gray-700 mb-1">본인 성별</label>
+                            <div class="grid grid-cols-2 gap-2">
+                                <button type="button" id="btnMale" onclick="selectGender('남')" class="p-3 rounded-xl border-2 border-gray-200 font-bold text-gray-600 hover:border-sky-400 transition cursor-pointer">👦 남성</button>
+                                <button type="button" id="btnFemale" onclick="selectGender('여')" class="p-3 rounded-xl border-2 border-gray-200 font-bold text-gray-600 hover:border-pink-400 transition cursor-pointer">👧 여성</button>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block font-semibold text-gray-700 mb-1">닉네임</label>
+                            <input type="text" id="regName" required placeholder="예: 무민사랑꾼" class="w-full p-3 rounded-xl border border-gray-200 bg-gray-50">
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block font-semibold text-gray-700 mb-1">대표 이모지</label>
+                                <input type="text" id="regEmoji" required value="🐰" maxlength="2" class="w-full p-3 rounded-xl border border-gray-200 bg-gray-50 text-center text-lg">
+                            </div>
+                            <div>
+                                <label class="block font-semibold text-gray-700 mb-1">연애 스타일 / 태그 (#쉼표 구분)</label>
+                                <input type="text" id="regTags" required placeholder="#다정함, #외향적" class="w-full p-3 rounded-xl border border-gray-200 bg-gray-50">
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block font-semibold text-gray-700 mb-1">한 줄 소개 (캐치프레이즈)</label>
+                            <input type="text" id="regTagline" required placeholder="웃는 모습이 예쁜 사람입니다" class="w-full p-3 rounded-xl border border-gray-200 bg-gray-50">
+                        </div>
+
+                        <div>
+                            <label class="block font-semibold text-gray-700 mb-1">상세 연애 스타일 소개</label>
+                            <textarea id="regDesc" required rows="2" placeholder="자신의 성향이나 선호하는 데이트 스타일을 적어주세요." class="w-full p-3 rounded-xl border border-gray-200 bg-gray-50 resize-none"></textarea>
+                        </div>
+
+                        <button type="submit" class="w-full bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 text-white font-bold py-3.5 rounded-xl transition cursor-pointer mt-3 text-sm shadow-lg">
+                            프로필 카드 등록하고 입장하기 🚀
+                        </button>
+                    </form>
+                </div>
+            `;
+        }
+
+        let tempGender = null;
+        function selectGender(g) {
+            tempGender = g;
+            document.getElementById('btnMale').className = g === '남' ? 'p-3 rounded-xl border-2 border-sky-500 bg-sky-50 font-bold text-sky-600 transition cursor-pointer' : 'p-3 rounded-xl border-2 border-gray-200 font-bold text-gray-600 transition cursor-pointer';
+            document.getElementById('btnFemale').className = g === '여' ? 'p-3 rounded-xl border-2 border-pink-500 bg-pink-50 font-bold text-pink-600 transition cursor-pointer' : 'p-3 rounded-xl border-2 border-gray-200 font-bold text-gray-600 transition cursor-pointer';
+        }
+
+        async function handleRegister(e) {
+            e.preventDefault();
+            if (!tempGender) {
+                alert('본인의 성별을 선택해 주세요!');
+                return;
+            }
+
+            const nameInput = document.getElementById('regName').value.trim();
+            const rawTags = document.getElementById('regTags').value;
+            const tags = rawTags.split(',').map(t => t.trim().startsWith('#') ? t.trim() : '#' + t.trim());
+
+            const newProfile = {
+                name: nameInput,
+                gender: tempGender,
+                emoji: document.getElementById('regEmoji').value,
+                tagline: document.getElementById('regTagline').value,
+                desc: document.getElementById('regDesc').value,
+                tags: tags
+            };
+
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/profiles`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newProfile)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    myGender = tempGender;
+                    myName = nameInput;
+                    localStorage.setItem('myGender', myGender);
+                    localStorage.setItem('myName', myName);
+                    initApp();
+                } else {
+                    alert('등록 중 오류가 발생했습니다.');
+                }
+            } catch (err) {
+                alert('서버 통신에 실패했습니다.');
+            }
+        }
+
+        // 2. 메인 대시보드 화면
+        async function renderDashboard(serverData) {
+            const busySet = new Set(serverData.busyUsers);
+            const availableProfiles = serverData.profiles.filter(p => !busySet.has(p.name));
+            const maleCount = availableProfiles.filter(p => p.gender === '남').length;
+            const femaleCount = availableProfiles.filter(p => p.gender === '여').length;
+            const targetProfiles = availableProfiles.filter(p => p.gender !== myGender);
+
+            app.innerHTML = `
+                <div class="py-4 fade-in">
+                    <div class="flex justify-between items-center mb-3 bg-gray-50 px-3 py-2 rounded-xl text-xs text-gray-600">
+                        <span>내 계정: <b>${myName} (${myGender}성)</b></span>
+                        <button onclick="handleAccountReset()" class="text-pink-500 font-semibold underline cursor-pointer">계정 초기화 🔄</button>
+                    </div>
+
+                    <div class="bg-gradient-to-r from-pink-50 to-purple-50 p-3 rounded-2xl mb-4 border border-pink-100 flex justify-around text-xs font-semibold text-gray-700">
+                        <span>👦 남성 대기: <b class="text-sky-600">${maleCount}명</b></span>
+                        <span>|</span>
+                        <span>👧 여성 대기: <b class="text-pink-600">${femaleCount}명</b></span>
+                    </div>
+
+                    <div class="inline-block p-2 bg-pink-100 rounded-2xl text-2xl mb-1">💖</div>
+                    <h2 class="text-lg font-extrabold text-gray-800 mb-4">실시간 이성 매칭 라운지</h2>
+
+                    <div class="space-y-2.5 text-xs">
+                        <button onclick="renderSelectMatchList()" class="w-full bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 text-white font-bold py-3.5 px-6 rounded-2xl shadow-lg transition cursor-pointer text-sm">
+                            💘 이성 카드 골라서 1:1 채팅하기 (${targetProfiles.length}명 대기중)
+                        </button>
+                        <button onclick="renderMatches()" class="w-full bg-purple-100 hover:bg-purple-200 text-purple-700 font-bold py-3 px-6 rounded-2xl transition cursor-pointer">
+                            💬 내 매칭 & 채팅방 목록 확인하기
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function handleAccountReset() {
+            if (!confirm('정말 계정을 초기화하시겠습니까? 등록된 프로필과 매칭 기록이 삭제됩니다.')) return;
+            try {
+                await fetch(`${API_BASE_URL}/api/reset`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: myName })
+                });
+            } catch (e) {
+                console.error(e);
+            }
+            localStorage.clear();
+            myGender = null;
+            myName = null;
+            initApp();
+        }
+
+        // 3. 전체 이성 프로필 카드 목록에서 선택하기
+        async function renderSelectMatchList() {
+            const serverData = await fetchServerData();
+            const busySet = new Set(serverData.busyUsers);
+            const targetProfiles = serverData.profiles.filter(p => p.gender !== myGender && !busySet.has(p.name));
+
+            app.innerHTML = `
+                <div class="py-2 fade-in text-left">
+                    <div class="flex justify-between items-center mb-4">
+                        <div>
+                            <h2 class="text-lg font-bold text-gray-800">💘 이성 프로필 카드 목록</h2>
+                            <p class="text-[11px] text-gray-500">마음에 드는 상대를 누르면 곧바로 1:1 채팅방이 열립니다!</p>
+                        </div>
+                        <button onclick="initApp()" class="text-xs text-gray-500 bg-gray-100 px-3 py-1 rounded-lg cursor-pointer">돌아가기</button>
+                    </div>
+
+                    ${targetProfiles.length === 0 ? '<p class="text-center text-gray-400 py-12 text-xs">현재 대기 중인 이성 참여자가 없습니다.<br>친구가 가입할 때까지 잠시만 기다려주세요!</p>' : `
+                    <div class="space-y-3 max-h-[380px] overflow-y-auto pr-1">
+                        ${targetProfiles.map(p => `
+                            <div class="card-glow bg-gradient-to-br from-pink-50/70 to-purple-50/70 border border-pink-200 p-4 rounded-2xl flex items-center justify-between transition">
+                                <div class="flex items-center gap-3.5 flex-1">
+                                    <span class="text-3xl bg-white p-2.5 rounded-2xl shadow-sm">${p.emoji}</span>
+                                    <div class="flex-1">
+                                        <h3 class="font-bold text-gray-800 text-sm">${p.name}</h3>
+                                        <p class="text-xs font-medium text-pink-600 mt-0.5">${p.tagline}</p>
+                                        <p class="text-[11px] text-gray-600 mt-1 leading-relaxed">${p.desc}</p>
+                                        <div class="flex gap-1 mt-2">
+                                            ${p.tags.map(t => `<span class="text-[9px] bg-white text-gray-600 px-1.5 py-0.5 rounded border border-pink-100">${t}</span>`).join('')}
+                                        </div>
+                                    </div>
+                                </div>
+                                <button onclick="selectProfileAndChat('${p.id}', '${p.name}')" class="ml-3 bg-pink-500 hover:bg-pink-600 text-white font-bold px-3.5 py-2.5 rounded-xl text-xs transition cursor-pointer shadow-md whitespace-nowrap">
+                                    선택 & 대화 💬
+                                </button>
+                            </div>
+                        `).join('')}
+                    </div>`}
+                </div>
+            `;
+        }
+
+        async function selectProfileAndChat(targetId, targetName) {
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/match`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ myName, targetId })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    openChat(data.matchId, targetName);
+                } else {
+                    alert('매칭 생성에 실패했습니다.');
+                }
+            } catch (err) {
+                alert('서버 통신에 실패했습니다.');
+            }
+        }
+
+        // 4. 내 매칭 및 채팅방 목록
+        async function renderMatches() {
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/matches/${encodeURIComponent(myName)}`);
+                const matches = await res.json();
+
+                app.innerHTML = `
+                    <div class="py-2 fade-in text-left">
+                        <div class="flex justify-between items-center mb-4">
+                            <h2 class="text-xl font-bold text-gray-800">💬 내 매칭 & 채팅방 목록</h2>
+                            <button onclick="initApp()" class="text-xs text-gray-500 bg-gray-100 px-3 py-1 rounded-lg cursor-pointer">돌아가기</button>
+                        </div>
+                        ${matches.length === 0 ? '<p class="text-center text-gray-400 py-10 text-xs">현재 진행 중인 채팅방이 없습니다.<br>이성 프로필 카드 목록에서 상대를 선택해 보세요!</p>' : `
+                        <div class="space-y-2.5 max-h-[360px] overflow-y-auto pr-1">
+                            ${matches.map(m => {
+                                const partner = m.user1 === myName ? m.user2 : m.user1;
+                                return `
+                                    <div onclick="openChat('${m.matchId}', '${partner}')" class="bg-gradient-to-r from-pink-50 to-purple-50 border border-pink-200 p-3.5 rounded-2xl flex items-center justify-between cursor-pointer hover:shadow-md transition">
+                                        <div class="flex items-center gap-3">
+                                            <span class="text-2xl bg-white p-2 rounded-xl shadow-xs">💌</span>
+                                            <div>
+                                                <h3 class="font-bold text-gray-800 text-xs">${partner} 님과의 대화방</h3>
+                                                <p class="text-[11px] text-pink-600 font-medium">클릭해서 채팅 이어하기 👉</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>`}
+                    </div>
+                `;
+            } catch (err) {
+                alert("매칭 목록을 불러오지 못했습니다.");
+            }
+        }
+
+        // 5. 1:1 실시간 채팅방 화면
+        async function openChat(matchId, partnerName) {
+            if (chatInterval) clearInterval(chatInterval);
+
+            const loadMessages = async () => {
+                try {
+                    const res = await fetch(`${API_BASE_URL}/api/chat/${matchId}`);
+                    const messages = await res.json();
+                    const chatBox = document.getElementById('chatBox');
+                    if (chatBox) {
+                        chatBox.innerHTML = messages.length === 0 ? '<p class="text-center text-gray-400 text-[11px] py-10">채팅방이 개설되었습니다! 첫 인사를 건네보세요 ✨</p>' : 
+                        messages.map(msg => `
+                            <div class="mb-2.5 flex flex-col ${msg.sender === myName ? 'items-end' : 'items-start'}">
+                                <span class="text-[10px] text-gray-400 mb-0.5">${msg.sender} (${msg.time})</span>
+                                <div class="px-3 py-2 rounded-2xl text-xs max-w-[80%] ${msg.sender === myName ? 'bg-pink-500 text-white rounded-br-xs' : 'bg-gray-100 text-gray-800 rounded-bl-xs'}">
+                                    ${msg.text}
+                                </div>
+                            </div>
+                        `).join('');
+                        chatBox.scrollTop = chatBox.scrollHeight;
+                    }
+                } catch (err) {
+                    console.error("채팅 로드 실패");
+                }
+            };
+
+            app.innerHTML = `
+                <div class="py-1 fade-in text-left flex flex-col h-[420px]">
+                    <div class="flex justify-between items-center pb-3 border-b border-gray-100 mb-2">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xl">💬</span>
+                            <h2 class="font-bold text-gray-800 text-sm">${partnerName} 님과 1:1 대화중</h2>
+                        </div>
+                        <button onclick="if(chatInterval) clearInterval(chatInterval); renderMatches();" class="text-xs text-gray-500 bg-gray-100 px-3 py-1 rounded-lg cursor-pointer">목록으로</button>
+                    </div>
+
+                    <div id="chatBox" class="flex-1 overflow-y-auto bg-gray-50/60 p-3 rounded-2xl border border-gray-200/80 mb-3 space-y-1">
+                        <!-- 메시지 목록 -->
+                    </div>
+
+                    <form onsubmit="sendChatMessage(event, '${matchId}')" class="flex gap-2">
+                        <input type="text" id="chatInput" required placeholder="메시지를 입력하세요..." class="flex-1 p-3 rounded-xl border border-gray-200 bg-white text-xs focus:outline-none focus:border-pink-400">
+                        <button type="submit" class="bg-pink-500 hover:bg-pink-600 text-white font-bold px-4 rounded-xl text-xs transition cursor-pointer">전송</button>
+                    </form>
+                </div>
+            `;
+
+            await loadMessages();
+            chatInterval = setInterval(loadMessages, 2000);
+        }
+
+        async function sendChatMessage(e, matchId) {
+            e.preventDefault();
+            const input = document.getElementById('chatInput');
+            const text = input.value.trim();
+            if (!text) return;
+
+            try {
+                await fetch(`${API_BASE_URL}/api/chat/${matchId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sender: myName, text })
+                });
+                input.value = '';
+                const res = await fetch(`${API_BASE_URL}/api/chat/${matchId}`);
+                const messages = await res.json();
+                const chatBox = document.getElementById('chatBox');
+                if (chatBox) {
+                    chatBox.innerHTML = messages.map(msg => `
+                        <div class="mb-2.5 flex flex-col ${msg.sender === myName ? 'items-end' : 'items-start'}">
+                            <span class="text-[10px] text-gray-400 mb-0.5">${msg.sender} (${msg.time})</span>
+                            <div class="px-3 py-2 rounded-2xl text-xs max-w-[80%] ${msg.sender === myName ? 'bg-pink-500 text-white rounded-br-xs' : 'bg-gray-100 text-gray-800 rounded-bl-xs'}">
+                                ${msg.text}
+                            </div>
+                        </div>
+                    `).join('');
+                    chatBox.scrollTop = chatBox.scrollHeight;
+                }
+            } catch (err) {
+                alert("메시지 전송에 실패했습니다.");
+            }
+        }
+
+        // 앱 최초 실행
+        initApp();
+    </script>
+</body>
+</html>
